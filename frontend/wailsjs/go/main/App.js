@@ -78,12 +78,20 @@ export function OpenExternal(arg1) {
   return window['go']['main']['App']['OpenExternal'](arg1);
 }
 
+export function RecoverAccounts() {
+  return window['go']['main']['App']['RecoverAccounts']();
+}
+
 export function RemoveAccount(arg1) {
   return window['go']['main']['App']['RemoveAccount'](arg1);
 }
 
 export function RenameAccount(arg1, arg2) {
   return window['go']['main']['App']['RenameAccount'](arg1, arg2);
+}
+
+export function ResetAccount(arg1) {
+  return window['go']['main']['App']['ResetAccount'](arg1);
 }
 
 export function SendChat(arg1) {
@@ -96,10 +104,6 @@ export function SetActiveAccount(arg1) {
 
 export function StartDeviceLogin() {
   return window['go']['main']['App']['StartDeviceLogin']();
-}
-
-export function StartSSOWatch(arg1) {
-  return window['go']['main']['App']['StartSSOWatch'](arg1);
 }
 
 export function UpdateSettings(arg1) {

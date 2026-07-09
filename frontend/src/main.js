@@ -16,6 +16,7 @@ import {
   RecoverAccounts,
   StartDeviceLogin,
   CancelDeviceLogin,
+  CreateAccount,
   OpenExternal,
   UpdateSettings,
   SendChat,
@@ -305,6 +306,7 @@ function ensureShell() {
           <div class="accounts" id="accounts"></div>
           <div class="rail-actions" style="margin-top:10px">
             <button class="btn btn-solid" id="btn-add">+ Adicionar conta</button>
+            <button class="btn btn-quiet" id="btn-auto-register" style="margin-top:4px">+ Criar automático</button>
             <button class="btn btn-quiet" id="btn-import-sso" style="margin-top:6px">Importar SSO</button>
             <button class="btn btn-quiet" id="btn-import-file" style="margin-top:4px">Importar de arquivo</button>
           </div>
@@ -389,6 +391,7 @@ function ensureShell() {
   `;
 
   $("#btn-add").onclick = startLogin;
+  $("#btn-auto-register").onclick = showAutoRegisterModal;
   $("#btn-import-sso").onclick = importSSO;
   $("#btn-import-file").onclick = importSSOFile;
   $("#btn-stats").onclick = openStatsModal;
@@ -835,6 +838,54 @@ function showDeviceModal(st) {
     state.device = null;
     overlay.remove();
   };
+}
+
+function showAutoRegisterModal() {
+  document.querySelector(".overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
+    <div class="sheet">
+      <h3>Criar conta automático</h3>
+      <p>Cole a URL de verificação do device login (vai gerar automaticamente):</p>
+      <input type="text" id="ar-url" placeholder="https://auth.x.ai/activate?user_code=XXXXXX" style="width:100%;box-sizing:border-box" />
+      <div class="sheet-actions" style="margin-top:12px">
+        <button class="btn btn-solid" id="ar-start">Criar conta</button>
+        <button class="btn btn-quiet" id="ar-cancel">Cancelar</button>
+      </div>
+      <div id="ar-progress" style="margin-top:10px;font-size:13px;color:var(--text-dim)"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  $("#ar-start", overlay).onclick = async () => {
+    const url = $("#ar-url", overlay)?.value?.trim();
+    if (!url) { alert("Cole a URL de verificação."); return; }
+    const btn = $("#ar-start", overlay);
+    const prog = $("#ar-progress", overlay);
+    btn.disabled = true;
+    btn.textContent = "Criando...";
+    prog.textContent = "Iniciando...";
+    try {
+      const result = await CreateAccount(url, "");
+      if (result?.status === "success") {
+        prog.textContent = "Conta criada! Recarregando...";
+        setTimeout(async () => {
+          overlay.remove();
+          await paintChrome();
+        }, 1500);
+      } else {
+        prog.textContent = "Erro: " + (result?.reason || "desconhecido");
+        btn.disabled = false;
+        btn.textContent = "Criar conta";
+      }
+    } catch (e) {
+      prog.textContent = "Erro: " + e;
+      btn.disabled = false;
+      btn.textContent = "Criar conta";
+    }
+  };
+  $("#ar-cancel", overlay).onclick = () => overlay.remove();
 }
 
 async function submit() {

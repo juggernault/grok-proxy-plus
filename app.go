@@ -18,6 +18,7 @@ import (
 	"grok-desktop/internal/oauth"
 	"grok-desktop/internal/pricing"
 	"grok-desktop/internal/proxyhttp"
+	"grok-desktop/internal/register"
 	"grok-desktop/internal/skills"
 	"grok-desktop/internal/store"
 	"grok-desktop/internal/upstream"
@@ -32,6 +33,7 @@ type App struct {
 	oauth    *oauth.Client
 	upstream *upstream.Client
 	proxy    *proxyhttp.Server
+	register *register.Runner
 	skills   *skills.Store
 	mcp      *mcpconfig.Store
 
@@ -86,6 +88,7 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		runtime.LogErrorf(ctx, "mcpconfig: %v", err)
 	}
+	a.register = register.New("python3", filepath.Join(st.Root(), "..", "grok-signup-bot"))
 
 	settings := st.Settings()
 	// Auto-watch APPDATA/sso-watch/ for SSO token files (E2E, zero config)
@@ -1081,6 +1084,22 @@ func (a *App) DeleteMCPServer(id string) error {
 		return fmt.Errorf("mcp store not ready")
 	}
 	return a.mcp.Delete(id)
+}
+
+func (a *App) CreateAccount(verificationURL, userCode string) *register.Result {
+	if a.register == nil {
+		return &register.Result{Status: "error", Reason: "register runner not ready"}
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 180*time.Second)
+	defer cancel()
+
+	result, err := a.register.CreateAccount(ctx, verificationURL, userCode, func(p register.Progress) {
+		runtime.LogInfof(a.ctx, "register step: %s", p.Step)
+	})
+	if err != nil {
+		return &register.Result{Status: "error", Reason: err.Error()}
+	}
+	return result
 }
 
 func strMap(m map[string]any, k string) string {

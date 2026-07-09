@@ -634,21 +634,7 @@ func recordUsage(st *store.Store, accountID string, statusCode int, u sseUsageCa
 	})
 }
 
-func nextAvailableAccount(accounts []store.Account) string {
-	for _, a := range accounts {
-		if a.IsExhausted() {
-			continue
-		}
-		if a.Expired() {
-			continue
-		}
-		if a.AccessToken == "" {
-			continue
-		}
-		return a.ID
-	}
-	return ""
-}
+
 
 func injectTemporalIntoResponsesInput(input []any) []any {
 	// Prepend a system-like user note if nothing temporal yet

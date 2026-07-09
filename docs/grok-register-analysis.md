@@ -1,3 +1,74 @@
+# Guia Prático: Importar SSO no Grok Desktop
+
+> 🧑‍💻 Se você é leigo, comece por aqui.
+
+## O que essa feature faz
+
+Permite importar **tokens SSO** (criados por ferramentas como grok-register) diretamente no Grok Desktop, sem precisar fazer login manual no navegador.
+
+## Como executar (passo a passo)
+
+### 1. Compilar o app com a nova feature
+
+No terminal, dentro da pasta do projeto:
+
+```bash
+# Entrar na branch da feature
+git checkout feature/import-sso
+
+# Compilar
+wails build
+```
+
+Isso gera o executável `GrokDesktop` na pasta `build/bin/`.
+
+### 2. Iniciar o Grok Desktop
+
+Execute o `GrokDesktop` compilado. A interface abre normalmente.
+
+### 3. Importar os SSO tokens
+
+Você tem **3 formas**, da mais manual à mais automática:
+
+#### 🔵 A) Colar um token (mais simples)
+
+Na sidebar:
+1. Clique em **"Importar SSO"**
+2. Cole o token SSO (aquele texto longo)
+3. A conta aparece na lista
+
+#### 🟡 B) Importar de arquivo (lote)
+
+Se você tem um arquivo com vários tokens (um por linha):
+1. Clique em **"Importar de arquivo"**
+2. Digite o caminho do arquivo (ex: `/home/voce/tokens.txt`)
+3. Todos os tokens são importados de uma vez
+
+#### 🟢 C) Via HTTP (automático, para desenvolvedores)
+
+Com o proxy rodando (`http://127.0.0.1:8787`), envie os tokens via curl:
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/sso \
+  -H "Content-Type: application/json" \
+  -d '{"token":"SEU_SSO_AQUI"}'
+```
+
+Pode enviar vários de uma vez:
+```json
+{"tokens": ["sso1", "sso2", "sso3"]}
+```
+
+### 4. Usar a conta
+
+Na sidebar, clique em **"Usar"** na conta importada. Agora é só conversar.
+
+---
+
+> **Precisa de ajuda para gerar os SSO tokens?** O grok-register (https://github.com/Florisheedless915/grok-register) cria contas xAI automaticamente. O Guia abaixo tem mais detalhes sobre ele.
+
+---
+
 # Análise de Integração: grok-register → grok-proxy-plus
 
 ## 1. Repositórios Analisados
@@ -180,3 +251,77 @@ grok-register (Docker)                 grok-proxy-plus (Desktop)
 ```
 
 Se quiser ainda mais integração, a **Opção A (wrapper)** poderia chamar o container Docker da CLI do Python via subprocesso e importar automaticamente — mas a Opção C+ já resolve 90% do problema com zero acoplamento entre os projetos.
+
+---
+
+## 6. Tutorial Passo a Passo
+
+### Cenário 1: Importar manual (rápido)
+
+1. **Rode o grok-register** (Docker ou Python) para gerar SSO tokens
+2. Abra o **Grok Desktop**
+3. Na sidebar, clique **"Importar SSO"**
+4. Cole o token (de `sso/sso_*.txt` ou `keys/grok.txt`)
+5. A conta aparece na lista e já fica ativa
+
+### Cenário 2: Importar de arquivo (lote)
+
+1. Com o arquivo de SSO em mãos (ex: `sso_20260709_143000.txt`)
+2. No Grok Desktop, clique **"Importar de arquivo"**
+3. Digite o caminho completo do arquivo
+   ```
+   /home/seuuser/grok-register/sso/sso_20260709_143000.txt
+   ```
+4. Todos os tokens do arquivo são importados de uma vez
+
+O arquivo pode estar nos formatos:
+- Apenas SSO: `sso_token_aqui` (uma por linha)
+- `email:password:SSO` (formato `accounts.txt`)
+
+### Cenário 3: HTTP endpoint (E2E real, zero toque)
+
+O proxy do Grok Desktop expõe `POST /v1/sso` para receber tokens direto via HTTP.
+
+**Passo único:** configure o grok-register para enviar tokens ao final do batch:
+
+```bash
+# No script pós-batch do grok-register
+for token in $(cat sso/sso_*.txt); do
+  curl -s -X POST http://127.0.0.1:8787/v1/sso \
+    -H "Content-Type: application/json" \
+    -d "{\"token\":\"$token\"}"
+done
+```
+
+Ou envie todos de uma vez:
+```bash
+curl -s -X POST http://127.0.0.1:8787/v1/sso \
+  -H "Content-Type: application/json" \
+  -d "$(jq -Rs '{tokens: split("\n") | map(select(length > 0))}' sso/sso_*.txt)"
+```
+
+**Payload aceitos:**
+```json
+{"token": "sso_token_aqui"}
+{"tokens": ["sso1", "sso2", "sso3"]}
+```
+
+**Sem arquivo, sem pasta, sem copiar.** O proxy recebe e importa na hora.
+
+### Fluxo E2E completo (zero toque)
+
+```
+1. docker compose up -d          # sobe grok-register + DuckMail + WARP
+2. Abre web UI do grok-register  # http://localhost:18600
+3. Configura e inicia o batch    # gera SSO tokens em sso/*.txt
+4. # Opcional: copia automática via script pós-batch
+   cp sso/*.txt ~/.local/share/GrokDesktop/sso-watch/
+5. Grok Desktop detecta sozinho  # watchdog a cada 30s
+6. Contas prontas pra usar       # seleciona no menu de contas
+```
+
+### Verificar se funcionou
+
+- Na sidebar do Grok Desktop, o número de contas aumenta
+- A conta importada aparece com label `SSO <email>` ou `SSO <id>`
+- Selecione a conta e envie uma mensagem

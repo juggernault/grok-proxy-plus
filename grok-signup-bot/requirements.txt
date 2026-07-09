@@ -1,0 +1,3 @@
+# Email layer uses stdlib only.
+# Playwright is for later signup automation (fase B).
+playwright>=1.40.0
