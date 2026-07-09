@@ -310,16 +310,43 @@ type Progress struct {
 | Docs | 1h |
 | **Total** | **13–18h** |
 
+## Features adicionais (pós-v1)
+
+### Geração de credenciais + persistência (`creds.py`)
+- `random_password(length=20)` — caracteres especiais inclusos, estilo `s1zV0bQL5UYjff7WNmmp`
+- `random_name(prefix="User")` — nome display aleatório: `"User a8f3k"`
+- `CredsStore` — salva `auto_creds.json` (append) no `CredsDir` (raiz da store)
+- Bot emite `__CREDS__` JSON no stdout antes de `__RESULT__`
+- Go bridge parseia e injeta no `Result.Creds`
+- Frontend exibe email/senha/nome no modal de sucesso por 5s
+
+### Auto-register automático (`autoRegisterLoop`)
+- Goroutine a cada **5 minutos** no `startup()`
+- `activeAccountCount()` — conta contas não exaustas, não expiradas, com token
+- Se count < 2, dispara `CreateAccountFromDevice()` até completar 2
+- `CreateAccountFromDevice()`: `StartDevice` → `grok_signup.py` → `PollDevice` → `ImportSSO`
+- Limite máximo 5 contas ativas (hard stop no loop e no batch)
+
+### Criação em lote (`CreateAccounts(n)`)
+- Binding Wails: `CreateAccounts(n int) []map[string]any`
+- Respeita `activeAccountCount()` — nunca excede 5 ativas
+- Frontend: botão **"+ Gerar contas"** na sidebar
+- Modal com input numérico (1–5), progresso inline por conta
+- Cada resultado mostra status + email da credencial
+
 ## Status (2026-07-09)
 
-| Etapa | Status | Arquivos |
+| Etapa / Feature | Status | Arquivos |
 |-------|--------|----------|
 | 1 — Email providers | ✅ Feito | `email_provider.py`, `email_mailtm.py`, `email_duckmail.py` |
 | 2 — grok_signup.py | ✅ Feito | `grok_signup.py` |
 | 3 — Turnstile patch | ⏸️ Adiado (não há iframe visível no POC) | — |
 | 4 — bot.go (Go bridge) | ✅ Feito | `internal/register/bot.go` |
 | 5 — App.CreateAccount | ✅ Feito | `app.go` |
-| 6 — Frontend modal | ✅ Feito | `frontend/src/main.js` (botão + modal) |
+| 6 — Frontend modal | ✅ Feito | `frontend/src/main.js` |
+| 7 — Creds generation + storage | ✅ Feito | `creds.py`, `grok_signup.py`, `bot.go`, `app.go` |
+| 8 — Auto-register loop (5min) | ✅ Feito | `app.go` (`autoRegisterLoop`, `activeAccountCount`) |
+| 9 — Batch create (1–5) | ✅ Feito | `app.go` (`CreateAccounts`), `frontend/src/main.js` |
 | Dead code cleanup | ✅ Feito | `nextAvailableAccount()` removido de `server.go` |
 | DuckMail default | ✅ Feito | `email_provider.py` default providers = `["duckmail", "mailtm"]` |
 
@@ -328,9 +355,23 @@ type Progress struct {
 - [x] `EmailProvider` + factory + fallback
 - [x] mailtm default; duckmail opcional
 - [ ] verification_uri de `StartDevice` sem duplicar user_code (pendente POC real)
-- [ ] Bot e PollDevice no mesmo ctx/timeout; cancel cruzado (pendente POC real)
+- [ ] Bot e PollDevice no mesmo ctx (parcial — `CreateAccountFromDevice` usa ctx único de 180s)
 - [x] Bot não devolve token
 - [x] ImportSSO e device manual permanecem
 - [x] "Criar conta" é botão adicional
 - [ ] Settings: python_path, bot_dir, email_providers, duckmail_* (pendente — usar env por ora)
+- [x] Credenciais geradas e persistidas (`auto_creds.json`)
+- [x] Criação automática se < 2 contas ativas (timer 5min)
+- [x] Criação em lote manual (1–5) com progresso
+- [x] Limite de 5 contas ativas respeitado
 - [ ] Pré-reqs no README
+
+## Novas decisões arquiteturais (pós-v1)
+
+| Decisão | Justificativa |
+|---------|---------------|
+| `CreateAccountFromDevice()` encapsula fluxo completo | Evita duplicação entre loop automático e batch manual |
+| `activeAccountCount()` como gatekeeper único | Tanto o loop quanto o batch respeitam o mesmo limite |
+| Goroutine separada para auto-register (não no timer do frontend) | Independe de UI estar aberta; roda em background |
+| Botão "Gerar contas" não remove "Criar automático" (verification URL manual) | Mantém fallback para casos de debug / POC manual |
+| Limite hard de 5 contas | Evita flood / rate-limit excessivo contra xAI; ajustável depois |
