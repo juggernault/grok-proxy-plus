@@ -1,3 +1,4 @@
-# Email layer uses stdlib only.
-# Playwright is for later signup automation (fase B).
-playwright>=1.40.0
+DrissionPage>=4.1.0.9
+curl_cffi>=0.7.0
+pyvirtualdisplay>=3.0
+playwright-captcha>=0.1.5
