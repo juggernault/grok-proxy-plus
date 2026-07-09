@@ -37,6 +37,8 @@ type Account struct {
 	Scope        string    `json:"scope,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	Exhausted    bool      `json:"exhausted,omitempty"`
+	ExhaustedAt  time.Time `json:"exhausted_at,omitempty"`
 }
 
 func (a *Account) Expired() bool {
@@ -51,6 +53,30 @@ func (a *Account) ExpiresSoon(skew time.Duration) bool {
 		return false
 	}
 	return time.Now().UTC().After(a.ExpiresAt.Add(-skew))
+}
+
+func (a *Account) IsExhausted() bool {
+	if !a.Exhausted {
+		return false
+	}
+	if a.ExhaustedAt.IsZero() {
+		return true
+	}
+	return time.Since(a.ExhaustedAt) < 24*time.Hour
+}
+
+func (a *Account) ExhaustedStatus() string {
+	if !a.Exhausted {
+		return ""
+	}
+	if a.ExhaustedAt.IsZero() {
+		return "exausta"
+	}
+	remaining := 24*time.Hour - time.Since(a.ExhaustedAt)
+	if remaining <= 0 {
+		return "recuperada"
+	}
+	return "exausta"
 }
 
 type Settings struct {
@@ -472,6 +498,8 @@ func (s *Store) PublicAccounts() []map[string]any {
 			"expires_at": a.ExpiresAt,
 			"expired":    a.Expired(),
 			"active":     a.ID == s.settings.ActiveAccountID,
+			"exhausted":  a.IsExhausted(),
+			"exhausted_status": a.ExhaustedStatus(),
 			"usage": map[string]any{
 				"prompt_tokens":     u.PromptTokens,
 				"completion_tokens": u.CompletionTokens,
@@ -580,6 +608,48 @@ func (s *Store) SetActiveAccount(id string) error {
 	}
 	s.settings.ActiveAccountID = id
 	return s.saveSettingsLocked()
+}
+
+func (s *Store) MarkAccountExhausted(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.accounts[id]
+	if !ok {
+		return fmt.Errorf("account not found: %s", id)
+	}
+	a.Exhausted = true
+	a.ExhaustedAt = time.Now().UTC()
+	a.UpdatedAt = time.Now().UTC()
+	s.accounts[id] = a
+	return s.saveAccountLocked(a)
+}
+
+func (s *Store) ResetAccountExhausted(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.accounts[id]
+	if !ok {
+		return fmt.Errorf("account not found: %s", id)
+	}
+	a.Exhausted = false
+	a.ExhaustedAt = time.Time{}
+	a.UpdatedAt = time.Now().UTC()
+	s.accounts[id] = a
+	return s.saveAccountLocked(a)
+}
+
+func (s *Store) RecoverExhaustedAccounts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, a := range s.accounts {
+		if a.Exhausted && !a.IsExhausted() {
+			a.Exhausted = false
+			a.ExhaustedAt = time.Time{}
+			a.UpdatedAt = time.Now().UTC()
+			s.accounts[id] = a
+			_ = s.saveAccountLocked(a)
+		}
+	}
 }
 
 func (s *Store) RecordRequest(sample RequestSample) error {

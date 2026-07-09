@@ -29,6 +29,10 @@ export function GetStats():Promise<Record<string, any>>;
 
 export function GetUsage():Promise<Record<string, store.UsageTotals>>;
 
+export function ImportSSO(arg1:string):Promise<Record<string, any>>;
+
+export function ImportSSOFromFile(arg1:string):Promise<Record<string, any>>;
+
 export function ListAccounts():Promise<Array<Record<string, any>>>;
 
 export function ListMCPServers():Promise<Array<Record<string, any>>>;
@@ -48,6 +52,8 @@ export function SendChat(arg1:upstream.ChatRequest):Promise<void>;
 export function SetActiveAccount(arg1:string):Promise<void>;
 
 export function StartDeviceLogin():Promise<main.deviceLoginState>;
+
+export function StartSSOWatch(arg1:string):Promise<void>;
 
 export function UpdateSettings(arg1:Record<string, any>):Promise<store.Settings>;
 

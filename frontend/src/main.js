@@ -6,10 +6,14 @@ import DOMPurify from "dompurify";
 
 import {
   GetBootstrap,
+  ImportSSO,
+  ImportSSOFromFile,
   ListModels,
   SetActiveAccount,
   RemoveAccount,
   RenameAccount,
+  ResetAccount,
+  RecoverAccounts,
   StartDeviceLogin,
   CancelDeviceLogin,
   OpenExternal,
@@ -301,6 +305,8 @@ function ensureShell() {
           <div class="accounts" id="accounts"></div>
           <div class="rail-actions" style="margin-top:10px">
             <button class="btn btn-solid" id="btn-add">+ Adicionar conta</button>
+            <button class="btn btn-quiet" id="btn-import-sso" style="margin-top:6px">Importar SSO</button>
+            <button class="btn btn-quiet" id="btn-import-file" style="margin-top:4px">Importar de arquivo</button>
           </div>
         </div>
 
@@ -383,6 +389,8 @@ function ensureShell() {
   `;
 
   $("#btn-add").onclick = startLogin;
+  $("#btn-import-sso").onclick = importSSO;
+  $("#btn-import-file").onclick = importSSOFile;
   $("#btn-stats").onclick = openStatsModal;
   $("#btn-stats-top").onclick = openStatsModal;
 
@@ -568,7 +576,8 @@ function paintChrome() {
             <strong title="${escapeHtml(a.email || a.id)}">${escapeHtml(a.label || a.email || a.id)}</strong>
             <div class="meta-line">
               ${a.active ? `<span class="badge badge-live">ativa</span>` : `<span class="badge badge-ok">salva</span>`}
-              ${a.expired ? `<span class="badge badge-warn">expirada</span>` : ""}
+              ${a.expired ? `<span class="badge badge-warn" title="Token OAuth expirado — faça login de novo">login expirado</span>` : ""}
+              ${a.exhausted ? `<span class="badge badge-warn" title="Cota/rate limit do free tier (~24h). Use Resetar se já liberou, ou outra conta.">cota esgotada</span>` : ""}
               <span>${escapeHtml((a.email || "").split("@")[0] || a.id.slice(0, 8))}</span>
             </div>
           </div>
@@ -584,6 +593,7 @@ function paintChrome() {
               ? `<button type="button" class="primary" data-act="noop" disabled style="opacity:.55">Em uso</button>`
               : `<button type="button" class="primary" data-act="select">Usar</button>`
           }
+          ${a.exhausted ? `<button type="button" data-act="reset">Resetar</button>` : ""}
           <button type="button" data-act="rename">Renomear</button>
           <button type="button" class="danger" data-act="remove">Remover</button>
         </div>
@@ -594,6 +604,10 @@ function paintChrome() {
           const act = btn.getAttribute("data-act");
           if (act === "select") {
             await SetActiveAccount(a.id);
+            await refreshBootstrap(false);
+          } else if (act === "reset") {
+            await ResetAccount(a.id);
+            await RecoverAccounts();
             await refreshBootstrap(false);
           } else if (act === "rename") {
             const next = prompt("Nome da conta", a.label || a.email || "");
@@ -753,6 +767,29 @@ async function saveGlobal(patch) {
     state.picks.model = patch.default_model;
     state.picks.cModel = patch.default_model;
     state.menus["c-model"]?.setValue(patch.default_model);
+  }
+}
+
+async function importSSO() {
+  const token = prompt("Cole o SSO token do grok-register:", "");
+  if (!token || !String(token).trim()) return;
+  try {
+    const result = await ImportSSO(String(token).trim());
+    await refreshBootstrap(true);
+  } catch (e) {
+    alert("Falha ao importar SSO: " + e);
+  }
+}
+
+async function importSSOFile() {
+  const path = prompt("Caminho do arquivo de SSO (ex: /caminho/sso.txt):", "");
+  if (!path || !String(path).trim()) return;
+  try {
+    const result = await ImportSSOFromFile(String(path).trim());
+    await refreshBootstrap(true);
+    alert(`Importado: ${result.imported} tokens de ${result.file}`);
+  } catch (e) {
+    alert("Falha ao importar arquivo: " + e);
   }
 }
 
@@ -1365,6 +1402,22 @@ function wireEvents() {
     state.device = null;
     document.querySelector(".overlay")?.remove();
   });
+  EventsOn("accounts:update", (accounts) => {
+    state.accounts = accounts || [];
+    paintChrome();
+  });
+
+  // Periodic recovery check — every 60s, auto-recover + refresh UI
+  setInterval(async () => {
+    try {
+      await RecoverAccounts();
+      const b = await GetBootstrap();
+      state.settings = b.settings || {};
+      state.accounts = b.accounts || [];
+      state.usage = b.usage || {};
+      paintChrome();
+    } catch (_) {}
+  }, 60000);
 }
 
 function sparklineSVG(values, color = "rgba(125,211,252,0.9)") {

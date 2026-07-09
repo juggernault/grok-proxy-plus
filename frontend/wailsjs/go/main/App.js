@@ -50,6 +50,14 @@ export function GetUsage() {
   return window['go']['main']['App']['GetUsage']();
 }
 
+export function ImportSSO(arg1) {
+  return window['go']['main']['App']['ImportSSO'](arg1);
+}
+
+export function ImportSSOFromFile(arg1) {
+  return window['go']['main']['App']['ImportSSOFromFile'](arg1);
+}
+
 export function ListAccounts() {
   return window['go']['main']['App']['ListAccounts']();
 }
@@ -88,6 +96,10 @@ export function SetActiveAccount(arg1) {
 
 export function StartDeviceLogin() {
   return window['go']['main']['App']['StartDeviceLogin']();
+}
+
+export function StartSSOWatch(arg1) {
+  return window['go']['main']['App']['StartSSOWatch'](arg1);
 }
 
 export function UpdateSettings(arg1) {

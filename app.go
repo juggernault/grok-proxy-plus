@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +22,8 @@ import (
 	"grok-desktop/internal/store"
 	"grok-desktop/internal/upstream"
 )
+
+const DebugCreds = false // set to true to log account state on each ensureCreds
 
 type App struct {
 	ctx context.Context
@@ -70,7 +75,7 @@ func (a *App) startup(ctx context.Context) {
 	a.store = st
 	a.oauth = oauth.New()
 	a.upstream = upstream.New()
-	a.proxy = proxyhttp.New(st, a.upstream, a.ensureCreds)
+	a.proxy = proxyhttp.New(st, a.upstream, a.ensureCreds, a.ImportSSO)
 	if sk, err := skills.Open(filepath.Join(st.Root(), "skills")); err == nil {
 		a.skills = sk
 	} else {
@@ -83,6 +88,14 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	settings := st.Settings()
+	// Auto-watch APPDATA/sso-watch/ for SSO token files (E2E, zero config)
+	ssoDir := filepath.Join(st.Root(), "sso-watch")
+	if err := os.MkdirAll(ssoDir, 0o700); err == nil {
+		go a.watchSSODir(ssoDir)
+		runtime.LogInfof(ctx, "sso watch: %s", ssoDir)
+	} else {
+		runtime.LogErrorf(ctx, "sso watch mkdir: %v", err)
+	}
 	if settings.ProxyEnabled {
 		listen := settings.ProxyListen
 		if listen == "" {
@@ -225,8 +238,19 @@ func (a *App) ListAccounts() []map[string]any {
 	return a.store.PublicAccounts()
 }
 
+func (a *App) emitAccountsUpdate() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "accounts:update", a.store.PublicAccounts())
+}
+
 func (a *App) SetActiveAccount(id string) error {
-	return a.store.SetActiveAccount(id)
+	err := a.store.SetActiveAccount(id)
+	if err == nil {
+		a.emitAccountsUpdate()
+	}
+	return err
 }
 
 func (a *App) RemoveAccount(id string) error {
@@ -240,6 +264,15 @@ func (a *App) RenameAccount(id, label string) error {
 	}
 	acc.Label = label
 	return a.store.UpsertAccount(*acc)
+}
+
+func (a *App) ResetAccount(id string) error {
+	return a.store.ResetAccountExhausted(id)
+}
+
+func (a *App) RecoverAccounts() {
+	a.store.RecoverExhaustedAccounts()
+	a.emitAccountsUpdate()
 }
 
 // StartDeviceLogin begins OAuth device flow. Frontend shows URL + code.
@@ -336,6 +369,158 @@ func (a *App) CancelDeviceLogin() {
 		a.deviceCancel = nil
 	}
 	a.deviceState = nil
+}
+
+// ImportSSO imports an SSO token from grok-register as a new account.
+func (a *App) ImportSSO(ssoToken string) (map[string]any, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not ready")
+	}
+	if ssoToken = strings.TrimSpace(ssoToken); ssoToken == "" {
+		return nil, fmt.Errorf("SSO token vazio")
+	}
+
+	teamID, userID := oauth.ClaimsFromAccess(ssoToken)
+	email, uid := a.oauth.UserInfo(context.Background(), ssoToken, a.oauth.Issuer)
+	if uid != "" {
+		userID = uid
+	}
+
+	// Build account
+	exp := time.Now().UTC().Add(90 * 24 * time.Hour) // SSO tokens are long-lived
+	id := userID
+	if id == "" {
+		id = fmt.Sprintf("sso_%d", time.Now().UnixNano())
+	}
+
+	label := "SSO"
+	if email != "" {
+		label = email
+	} else if len(id) >= 8 {
+		label = "SSO " + id[:8]
+	}
+
+	acc := store.Account{
+		ID:          id,
+		Label:       label,
+		Email:       email,
+		AccessToken: ssoToken,
+		ExpiresAt:   exp,
+		ClientID:    a.oauth.ClientID,
+		Issuer:      a.oauth.Issuer,
+		TeamID:      teamID,
+		UserID:      userID,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	if prev, ok := a.store.GetAccount(acc.ID); ok && prev != nil {
+		if prev.Label != "" && prev.Label != prev.Email && !strings.HasPrefix(prev.Label, "SSO") {
+			acc.Label = prev.Label
+		}
+		acc.CreatedAt = prev.CreatedAt
+	}
+
+	if err := a.store.UpsertAccount(acc); err != nil {
+		return nil, fmt.Errorf("salvar conta: %w", err)
+	}
+
+	_ = a.store.SetActiveAccount(acc.ID)
+
+	runtime.EventsEmit(a.ctx, "auth:success", map[string]any{
+		"id":       acc.ID,
+		"email":    acc.Email,
+		"label":    acc.Label,
+		"accounts": a.store.PublicAccounts(),
+		"count":    len(a.store.ListAccounts()),
+	})
+
+	return map[string]any{
+		"id":     acc.ID,
+		"email":  acc.Email,
+		"label":  acc.Label,
+		"teamID": teamID,
+	}, nil
+}
+
+// ImportSSOFromFile reads a file with SSO tokens (one per line) and imports each.
+func (a *App) ImportSSOFromFile(filePath string) (map[string]any, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("store not ready")
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("abrir arquivo: %w", err)
+	}
+	defer f.Close()
+
+	var imported []map[string]any
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		// Lines may be "email:password:SSO" (accounts.txt) or just "SSO" (grok.txt)
+		token := line
+		if parts := strings.SplitN(line, ":", 3); len(parts) == 3 && parts[2] != "" {
+			token = parts[2]
+		}
+		acc, err := a.ImportSSO(token)
+		if err != nil {
+			runtime.LogErrorf(a.ctx, "import SSO from file: %v", err)
+			continue
+		}
+		imported = append(imported, acc)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("ler arquivo: %w", err)
+	}
+
+	runtime.EventsEmit(a.ctx, "sso:import-done", map[string]any{
+		"imported": len(imported),
+		"file":     filePath,
+	})
+
+	return map[string]any{
+		"imported": len(imported),
+		"file":     filePath,
+	}, nil
+}
+
+// watchSSODir periodically scans a directory for new SSO token files and imports them.
+func (a *App) watchSSODir(dir string) {
+	seen := map[string]bool{}
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".txt") {
+				continue
+			}
+			if seen[e.Name()] {
+				continue
+			}
+			fp := filepath.Join(dir, e.Name())
+			result, err := a.ImportSSOFromFile(fp)
+			if err != nil {
+				runtime.LogErrorf(a.ctx, "sso watch import %s: %v", e.Name(), err)
+			} else {
+				n := result["imported"].(int)
+				if n > 0 {
+					runtime.EventsEmit(a.ctx, "notification", map[string]any{
+						"title": "SSO importado",
+						"body":  fmt.Sprintf("%d tokens de %s", n, e.Name()),
+					})
+				}
+			}
+			seen[e.Name()] = true
+		}
+		time.Sleep(30 * time.Second)
+	}
 }
 
 func (a *App) GetDeviceLoginState() *deviceLoginState {
@@ -645,31 +830,108 @@ func (a *App) ensureCreds(ctx context.Context) (string, *store.Account, store.Se
 		return "", nil, store.Settings{}, fmt.Errorf("store not ready")
 	}
 	settings := a.store.Settings()
+
+	// Log available accounts for debugging account exhaustion
+	if DebugCreds {
+		accs := a.store.ListAccounts()
+		for _, ac := range accs {
+			log.Printf("ensureCreds: account %s | exhausted=%v exhaustedAt=%v expired=%v hasToken=%v",
+				ac.Label, ac.Exhausted, ac.ExhaustedAt, ac.Expired(), ac.AccessToken != "")
+		}
+	}
+
+	// Auto-recover first
+	a.store.RecoverExhaustedAccounts()
+
 	acc, ok := a.store.ActiveAccount()
 	if !ok || acc == nil {
 		return "", nil, settings, fmt.Errorf("nenhuma conta — adicione uma conta em Contas")
 	}
-	// refresh if needed
-	if acc.ExpiresSoon(5*time.Minute) && acc.RefreshToken != "" {
+
+	// Skip exhausted accounts — find first non-exhausted
+	accounts := a.store.ListAccounts()
+	if acc.IsExhausted() || acc.Expired() {
+		for _, candidate := range accounts {
+			if candidate.IsExhausted() {
+				continue
+			}
+			if candidate.AccessToken == "" {
+				continue
+			}
+			// Allow expired — try refresh below
+			_ = a.store.SetActiveAccount(candidate.ID)
+			a.emitAccountsUpdate()
+			acc, ok = a.store.ActiveAccount()
+			if ok && acc != nil {
+				break
+			}
+		}
+		if acc == nil || acc.IsExhausted() {
+			return "", nil, settings, fmt.Errorf("todas as contas exauridas — aguarde o reset de 24h ou clique em Resetar")
+		}
+		if !ok {
+			return "", nil, settings, fmt.Errorf("nenhuma conta disponível — adicione ou importe contas")
+		}
+	}
+
+	// Also verify AccessToken is non-empty — token can be invalid without being "exhausted"
+	if acc.AccessToken == "" {
+		return "", nil, settings, fmt.Errorf("conta %s sem access_token", acc.Label)
+	}
+
+	// refresh if needed — try up to 3 accounts
+	for attempt := 0; attempt < 3; attempt++ {
+		if !acc.ExpiresSoon(5*time.Minute) || acc.RefreshToken == "" {
+			break
+		}
 		tok, err := a.oauth.Refresh(ctx, acc.RefreshToken, acc.ClientID, acc.Issuer)
 		if err != nil {
 			if acc.Expired() {
-				return "", nil, settings, fmt.Errorf("token expirado — faça login de novo: %v", err)
+				log.Printf("ensureCreds: refresh falhou para %s (expirada): %v — pulando para próxima conta", acc.Label, err)
+				next, err2 := a.nextNonExhaustedWithContext(ctx)
+				if err2 != nil {
+					return "", nil, settings, err2
+				}
+				a.emitAccountsUpdate()
+				acc = next
+				continue
 			}
-		} else {
-			acc.AccessToken = tok.AccessToken
-			if tok.RefreshToken != "" {
-				acc.RefreshToken = tok.RefreshToken
-			}
-			acc.ExpiresAt = time.Now().UTC().Add(time.Duration(tok.ExpiresIn) * time.Second)
-			acc.UpdatedAt = time.Now().UTC()
-			_ = a.store.UpsertAccount(*acc)
+			break
 		}
+		acc.AccessToken = tok.AccessToken
+		if tok.RefreshToken != "" {
+			acc.RefreshToken = tok.RefreshToken
+		}
+		acc.ExpiresAt = time.Now().UTC().Add(time.Duration(tok.ExpiresIn) * time.Second)
+		acc.UpdatedAt = time.Now().UTC()
+		_ = a.store.UpsertAccount(*acc)
+		break
 	}
 	if acc.AccessToken == "" {
-		return "", nil, settings, fmt.Errorf("conta sem access_token")
+		return "", nil, settings, fmt.Errorf("conta %s sem access_token", acc.Label)
+	}
+	if acc.IsExhausted() {
+		return "", nil, settings, fmt.Errorf("todas as contas exauridas — aguarde o reset de 24h ou clique em Resetar")
 	}
 	return acc.AccessToken, acc, settings, nil
+}
+
+func (a *App) nextNonExhaustedWithContext(ctx context.Context) (*store.Account, error) {
+	accounts := a.store.ListAccounts()
+	for _, candidate := range accounts {
+		if candidate.IsExhausted() {
+			continue
+		}
+		if candidate.AccessToken == "" {
+			continue
+		}
+		_ = a.store.SetActiveAccount(candidate.ID)
+		acc, ok := a.store.ActiveAccount()
+		if ok && acc != nil {
+			return acc, nil
+		}
+	}
+	return nil, fmt.Errorf("nenhuma conta disponível — adicione ou importe contas")
 }
 
 func (a *App) injectAgentContext(msgs []upstream.ChatMessage) []upstream.ChatMessage {

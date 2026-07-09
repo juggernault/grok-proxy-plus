@@ -198,11 +198,13 @@ button {
 
 .account .meta-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   margin-top: 2px;
   font-size: 10.5px;
   color: var(--text-3);
+  overflow: hidden;
 }
 
 .badge {
