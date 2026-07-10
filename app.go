@@ -1574,24 +1574,43 @@ func strMap(m map[string]any, k string) string {
 }
 
 func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir string) {
+	// Prefer absolute paths so double-click / shortcut CWD never breaks bot discovery.
+	if abs, err := filepath.Abs(exeDir); err == nil {
+		exeDir = abs
+	}
+	if eval, err := filepath.EvalSymlinks(exeDir); err == nil && eval != "" {
+		exeDir = eval
+	}
+
 	pythonPath = strings.TrimSpace(s.PythonPath)
 	botDir = strings.TrimSpace(s.BotDir)
+
+	// Relative settings → relative to the executable directory (not CWD).
+	if pythonPath != "" && !filepath.IsAbs(pythonPath) {
+		pythonPath = filepath.Join(exeDir, pythonPath)
+	}
+	if botDir != "" && !filepath.IsAbs(botDir) {
+		botDir = filepath.Join(exeDir, botDir)
+	}
+
 	if pythonPath == "" {
-		// monorepo / wails dev layout (Linux + Windows)
 		var pyCands []string
 		if goruntime.GOOS == "windows" {
 			pyCands = []string{
-				filepath.Join(exeDir, "..", "..", ".venv", "Scripts", "python.exe"),
 				filepath.Join(exeDir, ".venv", "Scripts", "python.exe"),
 				filepath.Join(exeDir, "python", "python.exe"),
+				filepath.Join(exeDir, "..", "..", ".venv", "Scripts", "python.exe"),
+				filepath.Join(exeDir, "..", ".venv", "Scripts", "python.exe"),
 			}
 		} else {
 			pyCands = []string{
-				filepath.Join(exeDir, "..", "..", ".venv", "bin", "python3"),
 				filepath.Join(exeDir, ".venv", "bin", "python3"),
+				filepath.Join(exeDir, "..", "..", ".venv", "bin", "python3"),
+				filepath.Join(exeDir, "..", ".venv", "bin", "python3"),
 			}
 		}
 		for _, cand := range pyCands {
+			cand = filepath.Clean(cand)
 			if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 				pythonPath = cand
 				break
@@ -1599,7 +1618,6 @@ func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir s
 		}
 		if pythonPath == "" {
 			if goruntime.GOOS == "windows" {
-				// Prefer python.exe on PATH; python3 is often missing on Windows
 				if p, err := exec.LookPath("python"); err == nil {
 					pythonPath = p
 				} else if p, err := exec.LookPath("python3"); err == nil {
@@ -1618,21 +1636,38 @@ func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir s
 			}
 		}
 	}
+
 	if botDir == "" {
+		// Order: next to exe (portable release), monorepo, parent folders, then cwd last.
+		cwd, _ := os.Getwd()
 		cands := []string{
-			filepath.Join(exeDir, "..", "..", "grok-signup-bot"),
 			filepath.Join(exeDir, "grok-signup-bot"),
 			filepath.Join(exeDir, "..", "grok-signup-bot"),
+			filepath.Join(exeDir, "..", "..", "grok-signup-bot"),
+		}
+		if cwd != "" {
+			cands = append(cands,
+				filepath.Join(cwd, "grok-signup-bot"),
+				filepath.Join(cwd, "..", "grok-signup-bot"),
+			)
 		}
 		for _, cand := range cands {
+			cand = filepath.Clean(cand)
 			if st, err := os.Stat(cand); err == nil && st.IsDir() {
-				botDir = cand
-				break
+				// Require the main script so empty folders don't win
+				if _, err := os.Stat(filepath.Join(cand, "grok_signup.py")); err == nil {
+					botDir = cand
+					break
+				}
 			}
 		}
 		if botDir == "" {
-			botDir = "grok-signup-bot"
+			// Always absolute path next to exe — never bare relative (breaks when CWD ≠ exe dir).
+			botDir = filepath.Join(exeDir, "grok-signup-bot")
 		}
+	}
+	if abs, err := filepath.Abs(botDir); err == nil {
+		botDir = abs
 	}
 	return pythonPath, botDir
 }

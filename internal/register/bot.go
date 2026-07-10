@@ -66,8 +66,11 @@ func (r *Runner) CreateAccount(
 	if st, err := os.Stat(script); err != nil || st.IsDir() {
 		return &Result{
 			Status: "error",
-			Reason: fmt.Sprintf("bot script missing: %s (set bot_dir / ship grok-signup-bot next to the exe)", script),
-			Step:   "start",
+			Reason: fmt.Sprintf(
+				"bot script missing: %s — put folder grok-signup-bot next to the .exe (or set bot_dir). Expected: <exe-dir>\\grok-signup-bot\\grok_signup.py",
+				script,
+			),
+			Step: "start",
 		}, nil
 	}
 	if _, err := exec.LookPath(r.PythonPath); err != nil {
