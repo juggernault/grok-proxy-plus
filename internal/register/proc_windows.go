@@ -9,7 +9,9 @@ import (
 	"syscall"
 )
 
-// hideConsoleWindow prevents a black console flash for python.exe child processes.
+// hideConsoleWindow prevents a black console flash for short-lived python/pip/taskkill.
+// Do NOT use this for the signup bot when Chrome must be visible — CREATE_NO_WINDOW /
+// HideWindow can prevent GUI child processes (Chrome) from showing a window.
 func hideConsoleWindow(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -17,6 +19,15 @@ func hideConsoleWindow(cmd *exec.Cmd) {
 	// CREATE_NO_WINDOW
 	cmd.SysProcAttr.CreationFlags |= 0x08000000
 	cmd.SysProcAttr.HideWindow = true
+}
+
+// allowGUIChildren leaves console inheritance alone so Chromium can open a normal window.
+// Prefer this for the long-running signup bot (headless=false).
+func allowGUIChildren(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	// No CREATE_NO_WINDOW / HideWindow — Chrome needs a visible desktop session.
 }
 
 // killProcessTree terminates cmd and all descendants (Chrome launched by DrissionPage).

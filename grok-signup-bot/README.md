@@ -37,10 +37,12 @@ Deps: `DrissionPage`, `curl_cffi`, optional `pyvirtualdisplay` (Linux), `playwri
 
 Desktop path resolution (`app.go` / settings):
 
-| | Dev monorepo | Release portable |
-|--|--------------|------------------|
-| Python | `.venv/bin/python3` or `.venv\Scripts\python.exe` | `python` / `py` on PATH, or settings `python_path` |
-| Bot dir | `<repo>/grok-signup-bot` | `grok-signup-bot` **next to the .exe** |
+| | Dev monorepo | Bare release .exe | Portable zip |
+|--|--------------|-------------------|--------------|
+| Python | `.venv` | `python` / `py` on PATH or settings | same |
+| Bot dir | `<repo>/grok-signup-bot` | **embedded** → `%LOCALAPPDATA%\GrokDesktop\signup-bot\<ver>\` | sibling `grok-signup-bot\` |
+
+Source of embed: `internal/register/bot/` (synced from this folder at build time).
 
 On cancel/timeout the Go runner kills the **process tree** (Windows `taskkill /T`; Unix process group) so Chrome does not stay orphaned.
 

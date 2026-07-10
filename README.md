@@ -61,8 +61,8 @@ Use it with **Cursor, Open Code, Continue, Open WebUI**, or any client that spea
 
 1. Open [Releases](../../releases)
 2. Download:
-   - **Windows:** `GrokProxyPlus-windows-amd64.exe` (app only) **or** `GrokProxyPlus-windows-amd64.exe.zip` (portable: exe + `grok-signup-bot/`)
-   - **Linux:** `GrokProxyPlus-linux-amd64` **or** `GrokProxyPlus-linux-amd64.tar.gz` (binary + bot)
+   - **Windows:** `GrokProxyPlus-windows-amd64.exe` (bot scripts **embedded** — extract to AppData) **or** `…exe.zip` (portable: exe + `grok-signup-bot/`)
+   - **Linux:** `GrokProxyPlus-linux-amd64` (embedded bot) **or** `…tar.gz` (binary + bot)
 3. Run the app → **+ Adicionar conta** → authorize in the browser
 4. Point your client at the local proxy (see below)
 
@@ -72,11 +72,11 @@ Use it with **Cursor, Open Code, Continue, Open WebUI**, or any client that spea
 
 | | Windows | Linux |
 |--|---------|--------|
-| Unpack | zip → folder with `GrokProxyPlus.exe` + `grok-signup-bot\` | tar.gz → dir with binary + bot |
+| Unpack | bare `.exe` OK (bot embedded) or zip with sibling `grok-signup-bot\` | bare binary OK or tar.gz |
 | Python | Python 3 from python.org, **Add to PATH** (`python -c "import sys; print(sys.executable)"`) | `python3` + venv |
-| Deps | `python -m pip install -r grok-signup-bot\requirements.txt` | `.venv/bin/pip install -r grok-signup-bot/requirements.txt` |
+| Deps | **auto** `python -m venv` + pip under AppData on first register | same |
 | Browser | Chrome or Edge | Chrome/Chromium |
-| Paths | App looks for `grok-signup-bot` **next to the exe**, then settings `python_path` / `bot_dir` | same |
+| Paths | settings → **embedded extract** under AppData → sibling `grok-signup-bot` | same |
 
 Without Python, **device login + SSO import** still work. SmartScreen may warn on unsigned builds — “More info → Run anyway”.
 
@@ -112,7 +112,7 @@ python -m venv .venv
 .\.venv\Scripts\pip install -r grok-signup-bot\requirements.txt
 ```
 
-Path resolution (in order): settings `python_path` / `bot_dir` → monorepo `.venv` → `python`/`python3` on PATH → `grok-signup-bot` next to the executable.
+Path resolution (bot): settings `bot_dir` → **embedded** extract under `%LOCALAPPDATA%\GrokDesktop\signup-bot\<ver>\` → monorepo / next to exe. Python: settings `python_path` → monorepo `.venv` → `python`/`python3` on PATH.
 
 ---
 
@@ -214,6 +214,8 @@ GrokDesktop/
 ├── usage.json
 ├── history.json
 ├── accounts/<id>.json
+├── signup-bot/<ver>/     # embedded bot extract (grok_signup.py, …)
+├── python-venv/          # auto-created venv + DrissionPage
 ├── skills/
 ├── mcp_servers.json
 ├── sso-watch/*.txt
@@ -246,7 +248,7 @@ Flow: **Device OAuth** → Python bot (`grok-signup-bot/`, **DrissionPage**) →
 | Plan | [plan/executed/auto-register-plan-v1.md](./plan/executed/auto-register-plan-v1.md) |
 
 **Risks:** ToS, bans, automation. Prefer manual device login for personal use.  
-Release zips ship `grok-signup-bot/`; you still install **host Python + pip deps + Chrome**.
+Bare release binaries **embed** the Python bot and extract it under AppData; on first auto-register the app creates **`python-venv`** and `pip install`s deps. You still need **host Python 3** (with venv/pip) and **Chrome/Edge**.
 
 ---
 

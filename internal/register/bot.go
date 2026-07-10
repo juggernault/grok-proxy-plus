@@ -67,7 +67,7 @@ func (r *Runner) CreateAccount(
 		return &Result{
 			Status: "error",
 			Reason: fmt.Sprintf(
-				"bot script missing: %s — put folder grok-signup-bot next to the .exe (or set bot_dir). Expected: <exe-dir>\\grok-signup-bot\\grok_signup.py",
+				"bot script missing: %s — bot should extract under AppData (embedded) or put grok-signup-bot next to the .exe / set bot_dir",
 				script,
 			),
 			Step: "start",
@@ -78,9 +78,31 @@ func (r *Runner) CreateAccount(
 		if st, err2 := os.Stat(r.PythonPath); err2 != nil || st.IsDir() {
 			return &Result{
 				Status: "error",
-				Reason: fmt.Sprintf("python not found: %q (install Python 3 + pip install -r grok-signup-bot/requirements.txt, or set python_path in settings)", r.PythonPath),
+				Reason: fmt.Sprintf("python not found: %q (install Python 3 + pip, or set python_path in settings)", r.PythonPath),
 				Step:   "start",
 			}, nil
+		}
+	}
+
+	// Auto venv + pip install under AppData (DrissionPage etc.)
+	if r.CredsDir != "" {
+		if progress != nil {
+			progress(Progress{Step: "deps", Message: "checking python packages"})
+		}
+		py, err := EnsureBotDeps(ctx, r.CredsDir, r.PythonPath, r.BotDir, func(msg string) {
+			if progress != nil {
+				progress(Progress{Step: "deps", Message: msg})
+			}
+		})
+		if err != nil {
+			return &Result{
+				Status: "error",
+				Reason: fmt.Sprintf("bot deps: %v", err),
+				Step:   "deps",
+			}, nil
+		}
+		if py != "" {
+			r.PythonPath = py
 		}
 	}
 
@@ -121,7 +143,8 @@ func (r *Runner) CreateAccount(
 	cmd.Dir = r.BotDir
 	// PYTHONUTF8 reduces cp1252 issues on Windows consoles
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-	hideConsoleWindow(cmd)
+	// Visible Chrome: do not CREATE_NO_WINDOW / HideWindow on Windows.
+	allowGUIChildren(cmd)
 	prepareProcessGroup(cmd)
 
 	stdout, err := cmd.StdoutPipe()

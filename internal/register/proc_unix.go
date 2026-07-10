@@ -9,24 +9,25 @@ import (
 
 func hideConsoleWindow(cmd *exec.Cmd) {}
 
+func allowGUIChildren(cmd *exec.Cmd) {}
+
 func prepareProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	// New process group so we can kill the whole tree (Chrome children) on cancel.
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// killProcessTree sends SIGKILL to the process group when possible, else Process.Kill.
 func killProcessTree(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	// Negative PID = process group
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	_ = cmd.Process.Kill()
 }
 
 func killHint() string {
-	return ""
+	return " (process group killed)"
 }

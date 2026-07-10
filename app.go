@@ -107,11 +107,33 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogErrorf(ctx, "mcpconfig: %v", err)
 	}
 	settings := st.Settings()
-	pyPath, botDir := resolveRegisterPaths(exeDir, settings)
+	// Prefer embedded bot extracted under AppData; still allow sibling/monorepo override.
+	var extractedBot string
+	if register.HasEmbeddedBot() {
+		if dest, err := register.ExtractEmbeddedBot(st.Root()); err != nil {
+			runtime.LogErrorf(ctx, "register: extract embedded bot: %v", err)
+		} else {
+			extractedBot = dest
+			runtime.LogInfof(ctx, "register: embedded bot extracted to %s (ver=%s)", dest, register.BotEmbedVersion())
+		}
+	}
+	pyPath, botDir := resolveRegisterPaths(exeDir, settings, extractedBot)
 	a.register = register.New(pyPath, botDir)
 	a.register.CredsDir = st.Root()
 	applyRegisterSettings(a.register, settings)
 	runtime.LogInfof(ctx, "register: python=%s bot_dir=%s auto=%v", pyPath, botDir, settings.AutoRegisterEnabled)
+	// Warm bot deps in background (venv + pip) so first register is faster.
+	go func() {
+		py, err := register.EnsureBotDeps(context.Background(), st.Root(), pyPath, botDir, nil)
+		if err != nil {
+			runtime.LogErrorf(ctx, "register: ensure deps: %v", err)
+			return
+		}
+		if a.register != nil && py != "" {
+			a.register.PythonPath = py
+			runtime.LogInfof(ctx, "register: venv python=%s", py)
+		}
+	}()
 
 	// Auto-watch APPDATA/sso-watch/ for SSO token files (E2E, zero config)
 	ssoDir := filepath.Join(st.Root(), "sso-watch")
@@ -288,7 +310,13 @@ func (a *App) UpdateSettings(patch map[string]any) (store.Settings, error) {
 	s := a.store.Settings()
 	if a.register != nil {
 		exe, _ := os.Executable()
-		py, bot := resolveRegisterPaths(filepath.Dir(exe), s)
+		var extracted string
+		if register.HasEmbeddedBot() && a.store != nil {
+			if dest, err := register.ExtractEmbeddedBot(a.store.Root()); err == nil {
+				extracted = dest
+			}
+		}
+		py, bot := resolveRegisterPaths(filepath.Dir(exe), s, extracted)
 		a.register.PythonPath = py
 		a.register.BotDir = bot
 		applyRegisterSettings(a.register, s)
@@ -1573,7 +1601,7 @@ func strMap(m map[string]any, k string) string {
 	return ""
 }
 
-func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir string) {
+func resolveRegisterPaths(exeDir string, s store.Settings, extractedBot string) (pythonPath, botDir string) {
 	// Prefer absolute paths so double-click / shortcut CWD never breaks bot discovery.
 	if abs, err := filepath.Abs(exeDir); err == nil {
 		exeDir = abs
@@ -1638,13 +1666,17 @@ func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir s
 	}
 
 	if botDir == "" {
-		// Order: next to exe (portable release), monorepo, parent folders, then cwd last.
+		// Prefer embedded extract (always available with bare .exe), then portable/monorepo trees.
 		cwd, _ := os.Getwd()
-		cands := []string{
+		cands := []string{}
+		if extractedBot != "" {
+			cands = append(cands, extractedBot)
+		}
+		cands = append(cands,
 			filepath.Join(exeDir, "grok-signup-bot"),
 			filepath.Join(exeDir, "..", "grok-signup-bot"),
 			filepath.Join(exeDir, "..", "..", "grok-signup-bot"),
-		}
+		)
 		if cwd != "" {
 			cands = append(cands,
 				filepath.Join(cwd, "grok-signup-bot"),
@@ -1654,12 +1686,14 @@ func resolveRegisterPaths(exeDir string, s store.Settings) (pythonPath, botDir s
 		for _, cand := range cands {
 			cand = filepath.Clean(cand)
 			if st, err := os.Stat(cand); err == nil && st.IsDir() {
-				// Require the main script so empty folders don't win
 				if _, err := os.Stat(filepath.Join(cand, "grok_signup.py")); err == nil {
 					botDir = cand
 					break
 				}
 			}
+		}
+		if botDir == "" && extractedBot != "" {
+			botDir = extractedBot
 		}
 		if botDir == "" {
 			// Always absolute path next to exe — never bare relative (breaks when CWD ≠ exe dir).
