@@ -12,8 +12,8 @@ import urllib.request
 from typing import Any
 
 API = "https://api.mail.tm"
-OTP_RE = re.compile(r"\b(\d{6})\b")
-XAI_HINT = re.compile(r"x\.ai|verification|verify|code|grok", re.I)
+OTP_RE = re.compile(r"([A-Z0-9]{3})[-\s]([A-Z0-9]{3})")
+XAI_HINT = re.compile(r"x\.ai|verification|verify|code|grok|confirmation", re.I)
 
 
 class MailTmProvider:
@@ -52,8 +52,11 @@ class MailTmProvider:
             raise RuntimeError(f"mail.tm {method} {path}: {e}") from e
 
     def create_inbox(self) -> dict:
-        domains = self._req("GET", "/domains")
-        members = domains.get("hydra:member") or domains.get("member") or []
+        raw = self._req("GET", "/domains")
+        if isinstance(raw, list):
+            members = raw
+        else:
+            members = raw.get("hydra:member") or raw.get("member") or []
         active = [
             d.get("domain")
             for d in members
@@ -87,8 +90,11 @@ class MailTmProvider:
         deadline = time.time() + timeout
         seen: set[str] = set()
         while time.time() < deadline:
-            listing = self._req("GET", "/messages", token=token) or {}
-            members = listing.get("hydra:member") or listing.get("member") or []
+            raw = self._req("GET", "/messages", token=token) or {}
+            if isinstance(raw, list):
+                members = raw
+            else:
+                members = raw.get("hydra:member") or raw.get("member") or []
             for msg in members:
                 mid = msg.get("id") or ""
                 if not mid or mid in seen:
@@ -106,7 +112,6 @@ class MailTmProvider:
                 body = _message_text(detail)
                 blob = f"{subj}\n{from_addr}\n{body}"
                 if not XAI_HINT.search(blob) and "x.ai" not in from_addr.lower():
-                    # still try extract — some mails omit hints
                     pass
                 code = _extract_otp(blob)
                 if code:
@@ -136,11 +141,10 @@ def _message_text(detail: dict) -> str:
 
 
 def _extract_otp(text: str) -> str | None:
-    # Prefer codes near verification wording
     best: str | None = None
     for m in OTP_RE.finditer(text):
-        code = m.group(1)
-        if code in ("000000", "123456"):
+        code = m.group(0)
+        if code in ("000-000", "123-456"):
             continue
         start = max(0, m.start() - 80)
         window = text[start : m.end() + 80]

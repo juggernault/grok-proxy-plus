@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -121,11 +122,13 @@ func (c *Client) PollDevice(ctx context.Context, deviceCode string, intervalSec 
 		form.Set("client_id", c.ClientID)
 		b, code, err := c.postForm(ctx, ep, form)
 		if err != nil {
+			log.Printf("PollDevice: HTTP error: %v", err)
 			return nil, err
 		}
 		var tok TokenResponse
 		_ = json.Unmarshal(b, &tok)
 		if tok.Error != "" {
+			log.Printf("PollDevice: error=%s desc=%s", tok.Error, tok.ErrorDesc)
 			switch tok.Error {
 			case "authorization_pending":
 				continue
@@ -149,6 +152,7 @@ func (c *Client) PollDevice(ctx context.Context, deviceCode string, intervalSec 
 		if tok.ExpiresIn <= 0 {
 			tok.ExpiresIn = 21600
 		}
+		log.Printf("PollDevice: success token_len=%d", len(tok.AccessToken))
 		return &tok, nil
 	}
 }

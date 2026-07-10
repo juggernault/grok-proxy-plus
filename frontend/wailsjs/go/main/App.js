@@ -114,6 +114,10 @@ export function SetActiveAccount(arg1) {
   return window['go']['main']['App']['SetActiveAccount'](arg1);
 }
 
+export function StartDevice() {
+  return window['go']['main']['App']['StartDevice']();
+}
+
 export function StartDeviceLogin() {
   return window['go']['main']['App']['StartDeviceLogin']();
 }

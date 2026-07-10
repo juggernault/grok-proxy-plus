@@ -137,6 +137,14 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			if errInfo.Classification == "rate_limit" && acc2 != nil {
 				log.Printf("proxyhttp account exhausted [anthropic] (switching): %s (%s)", acc2.Label, acc2.Email)
 				_ = s.store.MarkAccountExhausted(acc2.ID)
+				s.notifyAccountChange()
+				tried[acc2.ID] = true
+				continue
+			}
+			if errInfo.Classification == "chat_denied" && acc2 != nil {
+				log.Printf("proxyhttp chat denied [anthropic] (switching): %s (%s)", acc2.Label, acc2.Email)
+				_ = s.store.MarkAccountChatDenied(acc2.ID, string(b))
+				s.notifyAccountChange()
 				tried[acc2.ID] = true
 				continue
 			}
@@ -156,11 +164,19 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(out)
+			if acc2 != nil {
+				usage := extractUsageFromPayload(string(b), "", "/chat/completions")
+				s.recordUsage(acc2.ID, resp.StatusCode, usage, "/chat/completions", model)
+			}
 			return
 		}
 
-		if err2 := streamOpenAIToAnthropic(r.Context(), w, resp.Body, model); err2 != nil {
+		usage, err2 := streamOpenAIToAnthropic(r.Context(), w, resp.Body, model)
+		if err2 != nil {
 			_ = err2
+		}
+		if acc2 != nil && (usage.promptTokens > 0 || usage.totalTokens > 0 || usage.completionTokens > 0) {
+			s.recordUsage(acc2.ID, resp.StatusCode, usage, "/chat/completions", model)
 		}
 		return
 	}
@@ -391,7 +407,8 @@ func openAIChatToAnthropicMessage(raw []byte, model string) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-func streamOpenAIToAnthropic(ctx context.Context, w http.ResponseWriter, body io.Reader, model string) error {
+func streamOpenAIToAnthropic(ctx context.Context, w http.ResponseWriter, body io.Reader, model string) (sseUsageCapture, error) {
+	var usage sseUsageCapture
 	setSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	fw := newFlushWriter(w)
@@ -423,7 +440,7 @@ func streamOpenAIToAnthropic(ctx context.Context, w http.ResponseWriter, body io
 	for sc.Scan() {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return usage, ctx.Err()
 		default:
 		}
 		line := sc.Text()
@@ -441,6 +458,21 @@ func streamOpenAIToAnthropic(ctx context.Context, w http.ResponseWriter, body io
 		if u, ok := chunk["usage"].(map[string]any); ok {
 			inputTok = asInt(u["prompt_tokens"], inputTok)
 			outputTok = asInt(u["completion_tokens"], outputTok)
+			if pt := asInt(u["prompt_tokens"], 0); pt > 0 {
+				usage.promptTokens = int64(pt)
+			}
+			if ct := asInt(u["completion_tokens"], 0); ct > 0 {
+				usage.completionTokens = int64(ct)
+			}
+			if tt := asInt(u["total_tokens"], 0); tt > 0 {
+				usage.totalTokens = int64(tt)
+			}
+			if rt := asInt(u["reasoning_tokens"], 0); rt > 0 {
+				usage.reasoningTokens = int64(rt)
+			}
+			if usage.totalTokens == 0 && (usage.promptTokens > 0 || usage.completionTokens > 0) {
+				usage.totalTokens = usage.promptTokens + usage.completionTokens + usage.reasoningTokens
+			}
 		}
 		choices, _ := chunk["choices"].([]any)
 		if len(choices) == 0 {
@@ -558,7 +590,16 @@ func streamOpenAIToAnthropic(ctx context.Context, w http.ResponseWriter, body io
 	_, _ = io.WriteString(fw, "\n")
 	_ = inputTok
 	_ = time.Now()
-	return sc.Err()
+	if usage.promptTokens == 0 && inputTok > 0 {
+		usage.promptTokens = int64(inputTok)
+	}
+	if usage.completionTokens == 0 && outputTok > 0 {
+		usage.completionTokens = int64(outputTok)
+	}
+	if usage.totalTokens == 0 {
+		usage.totalTokens = usage.promptTokens + usage.completionTokens + usage.reasoningTokens
+	}
+	return usage, sc.Err()
 }
 
 func asInt(v any, def int) int {

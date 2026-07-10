@@ -32,14 +32,18 @@ import (
 //
 // Not supported (explicit 404): /v1/completions (legacy).
 type Server struct {
-	mu       sync.Mutex
-	store    *store.Store
-	upstream *upstream.Client
-	ensure   func(ctx context.Context) (token string, account *store.Account, settings store.Settings, err error)
+	mu        sync.Mutex
+	store     *store.Store
+	upstream  *upstream.Client
+	ensure    func(ctx context.Context) (token string, account *store.Account, settings store.Settings, err error)
 	importSSO func(ssoToken string) (map[string]any, error)
-	srv      *http.Server
-	ln       net.Listener
-	addr     string
+	srv       *http.Server
+	ln        net.Listener
+	addr      string
+
+	// Optional hooks for the desktop App (usage UI + account cards).
+	OnUsage         func(sample store.RequestSample)
+	OnAccountChange func()
 }
 
 func New(
@@ -426,7 +430,7 @@ func (s *Server) proxyUpstream(w http.ResponseWriter, r *http.Request, path stri
 			usage := pipeSSEWithUsage(w, resp.Body, path)
 			resp.Body.Close()
 			if acc != nil && (usage.promptTokens > 0 || usage.totalTokens > 0) {
-				recordUsage(s.store, acc.ID, resp.StatusCode, usage, path, modelName)
+				s.recordUsage(acc.ID, resp.StatusCode, usage, path, modelName)
 			}
 			return
 		}
@@ -442,14 +446,24 @@ func (s *Server) proxyUpstream(w http.ResponseWriter, r *http.Request, path stri
 			if errInfo.Classification == "rate_limit" && acc != nil {
 				log.Printf("proxyhttp account exhausted (switching): %s (%s)", acc.Label, acc.Email)
 				_ = s.store.MarkAccountExhausted(acc.ID)
+				s.notifyAccountChange()
 				tried[acc.ID] = true
 				// Try another account on next iteration
 				continue
 			}
+			if errInfo.Classification == "chat_denied" && acc != nil {
+				log.Printf("proxyhttp chat denied (switching): %s (%s) — %s", acc.Label, acc.Email, errInfo.Detail)
+				_ = s.store.MarkAccountChatDenied(acc.ID, string(bodyBytes))
+				s.notifyAccountChange()
+				tried[acc.ID] = true
+				continue
+			}
 
-			// Non-rate-limit errors are terminal
+			// Non-recoverable errors are terminal (or all accounts already tried)
 			if errInfo.Classification == "rate_limit" {
 				w.Header().Set("X-Account-Status", "all-exhausted")
+			} else if errInfo.Classification == "chat_denied" {
+				w.Header().Set("X-Account-Status", "chat_denied")
 			} else {
 				w.Header().Set("X-Account-Status", errInfo.Classification)
 			}
@@ -481,7 +495,7 @@ func (s *Server) proxyUpstream(w http.ResponseWriter, r *http.Request, path stri
 		_, _ = w.Write(bodyBytes)
 		if acc != nil {
 			usage := extractUsageFromPayload(string(bodyBytes), "", path)
-			recordUsage(s.store, acc.ID, resp.StatusCode, usage, path, modelName)
+			s.recordUsage(acc.ID, resp.StatusCode, usage, path, modelName)
 		}
 		return
 	}
@@ -582,6 +596,11 @@ func diagnoseUpstreamError(status int, body []byte, path, clientVer string) errC
 		return errClassification{"rate_limit", "upstream retornou HTTP 402 (Payment Required) — quota exaurida"}
 	case status == 403 && strings.Contains(bodyStr, "version"):
 		return errClassification{"client_version", "cli-chat-proxy rejeitou a versão do cliente (" + clientVer + ")"}
+	case status == 403 && (strings.Contains(bodyStr, "access to the chat endpoint is denied") ||
+		strings.Contains(bodyStr, "chat endpoint is denied") ||
+		strings.Contains(bodyStr, "update the permissions") ||
+		(strings.Contains(bodyStr, "permission") && strings.Contains(bodyStr, "denied"))):
+		return errClassification{"chat_denied", "Forbidden: Access to the chat endpoint is denied (permissions)"}
 	case status == 403:
 		return errClassification{"auth_error", "upstream retornou HTTP 403 — token/permisão inválida"}
 	case status == 401:
@@ -605,7 +624,7 @@ func diagnoseUpstreamError(status int, body []byte, path, clientVer string) errC
 	}
 }
 
-func recordUsage(st *store.Store, accountID string, statusCode int, u sseUsageCapture, path, model string) {
+func (s *Server) recordUsage(accountID string, statusCode int, u sseUsageCapture, path, model string) {
 	if u.promptTokens == 0 && u.completionTokens == 0 && u.totalTokens == 0 {
 		return
 	}
@@ -615,23 +634,33 @@ func recordUsage(st *store.Store, accountID string, statusCode int, u sseUsageCa
 	}
 	modelID := model
 	if modelID == "" {
-		modelID = st.Settings().DefaultModel
+		modelID = s.store.Settings().DefaultModel
 	}
 	cost := pricing.CostUSD(modelID, u.promptTokens, u.completionTokens, u.reasoningTokens, 0)
-	_ = st.RecordRequest(store.RequestSample{
+	sample := store.RequestSample{
 		ID:               uuid.NewString(),
 		At:               time.Now().UTC().Format(time.RFC3339),
-		AccountID:         accountID,
+		AccountID:        accountID,
 		Model:            modelID,
 		PromptTokens:     u.promptTokens,
 		CompletionTokens: u.completionTokens,
 		ReasoningTokens:  u.reasoningTokens,
-		TotalTokens:     total,
+		TotalTokens:      total,
 		CostUSD:          cost,
-		LatencyMs:         0,
+		LatencyMs:        0,
 		TTFTMs:           0,
 		Estimated:        statusCode >= 400,
-	})
+	}
+	_ = s.store.RecordRequest(sample)
+	if s.OnUsage != nil {
+		s.OnUsage(sample)
+	}
+}
+
+func (s *Server) notifyAccountChange() {
+	if s.OnAccountChange != nil {
+		s.OnAccountChange()
+	}
 }
 
 

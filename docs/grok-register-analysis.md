@@ -1,6 +1,11 @@
 # Guia Prático: Importar SSO no Grok Desktop
 
 > 🧑‍💻 Se você é leigo, comece por aqui.
+>
+> **Status 2026-07-09:** SSO import (UI / arquivo / `sso-watch` / `POST /v1/sso`) está
+> **implementado** na `main`. Auto-registro nativo: `grok-signup-bot/` +
+> [`auto-register-plan-v1.md`](../plan/executed/auto-register-plan-v1.md).  
+> Auditoria: [`FINDINGS.md`](../plan/executed/FINDINGS.md) · Hardening: [`hardening-plan-v1.md`](../plan/open/hardening-plan-v1.md).
 
 ## O que essa feature faz
 
@@ -13,10 +18,6 @@ Permite importar **tokens SSO** (criados por ferramentas como grok-register) dir
 No terminal, dentro da pasta do projeto:
 
 ```bash
-# Entrar na branch da feature
-git checkout feature/import-sso
-
-# Compilar
 wails build
 ```
 
@@ -136,7 +137,7 @@ Aplicação **desktop** (Go + Wails v2) que:
 - Expõe proxy local **OpenAI-compatible** em `http://127.0.0.1:8787/v1`
 - Fornece UI de chat com streaming, search tools, histórico
 - Suporta múltiplas contas xAI (armazenadas como JSON em AppData)
-- **Não tem capacidade de criar contas** — usuário precisa já ter conta xAI
+- Pode **importar SSO** e **auto-registrar** (experimental; ver FINDINGS H1–H3)
 
 ### Stack
 

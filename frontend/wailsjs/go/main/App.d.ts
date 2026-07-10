@@ -62,6 +62,8 @@ export function SendChat(arg1:upstream.ChatRequest):Promise<void>;
 
 export function SetActiveAccount(arg1:string):Promise<void>;
 
+export function StartDevice():Promise<Record<string, string>>;
+
 export function StartDeviceLogin():Promise<main.deviceLoginState>;
 
 export function UpdateSettings(arg1:Record<string, any>):Promise<store.Settings>;

@@ -19,18 +19,22 @@ type Progress struct {
 
 // Result is the final outcome from the bot.
 type Result struct {
-	Status     string            `json:"status"`     // "success" | "error"
-	Reason     string            `json:"reason,omitempty"`
-	Step       string            `json:"step,omitempty"`
-	Screenshot string            `json:"screenshot,omitempty"`
-	Creds      map[string]string `json:"creds,omitempty"` // email, name, password, provider
+	Status      string            `json:"status"`     // "success" | "error"
+	Reason      string            `json:"reason,omitempty"`
+	Step        string            `json:"step,omitempty"`
+	Screenshot  string            `json:"screenshot,omitempty"`
+	Creds       map[string]string `json:"creds,omitempty"` // email, name, password, provider
+	AccessToken string            `json:"access_token,omitempty"`
 }
 
-// Runner manages the Python Playwright bot subprocess.
+// Runner manages the Python signup bot subprocess (DrissionPage).
 type Runner struct {
-	PythonPath string // default "python3"
-	BotDir     string // path to grok-signup-bot/
-	CredsDir   string // directory to save auto_creds.json
+	PythonPath     string // default "python3"
+	BotDir         string // path to grok-signup-bot/
+	CredsDir       string // directory to save auto_creds.json
+	EmailProviders []string
+	DuckMailURL    string
+	DuckMailKey    string
 }
 
 // New creates a Runner with sensible defaults.
@@ -54,13 +58,26 @@ func (r *Runner) CreateAccount(
 	args := []string{
 		script,
 		"--verification-url", verificationURL,
-		"--headless", "true",
+		"--headless", "false",
 	}
 	if userCode != "" {
 		args = append(args, "--user-code", userCode)
 	}
 	if r.CredsDir != "" {
 		args = append(args, "--creds-dir", r.CredsDir)
+	}
+	if len(r.EmailProviders) > 0 {
+		joined := r.EmailProviders[0]
+		for i := 1; i < len(r.EmailProviders); i++ {
+			joined += "," + r.EmailProviders[i]
+		}
+		args = append(args, "--email-providers", joined)
+	}
+	if r.DuckMailURL != "" {
+		args = append(args, "--duckmail-url", r.DuckMailURL)
+	}
+	if r.DuckMailKey != "" {
+		args = append(args, "--duckmail-key", r.DuckMailKey)
 	}
 
 	cmd := exec.CommandContext(ctx, r.PythonPath, args...)
@@ -84,6 +101,7 @@ func (r *Runner) CreateAccount(
 	go func() {
 		defer close(resultCh)
 		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 64*1024), 256*1024)
 		for sc.Scan() {
 			line := sc.Text()
 			if len(line) < 2 {
@@ -100,8 +118,8 @@ func (r *Runner) CreateAccount(
 				}
 				continue
 			}
-			if len(line) > 8 && line[:8] == "__CREDS__ " {
-				payload := line[8:]
+			if len(line) > 9 && line[:9] == "__CREDS__" && line[9] == ' ' {
+				payload := line[10:]
 				var c map[string]string
 				if err := json.Unmarshal([]byte(payload), &c); err != nil {
 					log.Printf("register: bad creds json: %v", err)
@@ -110,20 +128,24 @@ func (r *Runner) CreateAccount(
 				creds = c
 				continue
 			}
-			if len(line) > 10 && line[:10] == "__RESULT__ " {
-				payload := line[10:]
+			if len(line) > 10 && line[:10] == "__RESULT__" && line[10] == ' ' {
+				payload := line[11:]
 				var res Result
 				if err := json.Unmarshal([]byte(payload), &res); err != nil {
 					log.Printf("register: bad result json: %v", err)
 					continue
 				}
 				res.Creds = creds
+				log.Printf("register: got __RESULT__ status=%s", res.Status)
 				resultCh <- &res
 				return
 			}
+			log.Printf("register stdout: %s", line)
 		}
 		if err := sc.Err(); err != nil {
 			log.Printf("register: stdout scan: %v", err)
+		} else {
+			log.Printf("register: stdout EOF (no __RESULT__)")
 		}
 	}()
 

@@ -49,8 +49,10 @@ def main():
     user_code = dev.get("user_code", "")
 
     script = os.path.join(os.path.dirname(__file__), "grok_signup.py")
+    venv_python = os.path.join(os.path.dirname(__file__), "..", ".venv", "bin", "python3")
+    python_exe = venv_python if os.path.exists(venv_python) else sys.executable
     cmd = [
-        sys.executable, script,
+        python_exe, script,
         "--verification-url", url,
         "--headless", args.headless,
         "--user-code", user_code,
